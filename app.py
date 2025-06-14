@@ -11,22 +11,26 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Initialize app and config
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Initialize extensions
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 
-
-note_tags = db.Table('note_tags',
-    db.Column('note_id', db.Integer,db.ForeignKey('notes.id')),
-    db.Column('tag_id',db.Integer, db.ForeignKey('tags.id'))
-
+# Association Table for Many-to-Many Relationship
+note_tags = db.Table(
+    'note_tags',
+    db.Column('note_id', db.Integer, db.ForeignKey('notes.id')),
+    db.Column('tag_id', db.Integer, db.ForeignKey('tags.id'))
 )
+
+# ============================= MODELS ============================= #
 
 class User(db.Model):
     __tablename__ = "users"
@@ -39,13 +43,14 @@ class User(db.Model):
     def __repr__(self):
         return f"User {self.fname}, {self.lname}, {self.email}"
 
+
 class Tag(db.Model):
     __tablename__ = "tags"
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), unique= True)
+    name = db.Column(db.String(50), unique=True)
 
-    
-
+    def __repr__(self):
+        return f"<Tag {self.name}>"
 
 
 class Notes(db.Model):
@@ -60,11 +65,13 @@ class Notes(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     user = db.relationship("User", backref="notes")
 
-    tags = db.relationship("Tag",secondary = note_tags, backref = db.backref("notes", lazy="dynamic"))
+    tags = db.relationship("Tag", secondary=note_tags, backref=db.backref("notes", lazy="dynamic"))
 
     def __repr__(self):
         return f"<Note id={self.id} title={self.title}>"
 
+
+# ============================= AUTH ROUTES ============================= #
 
 @app.route("/register", methods=["POST"])
 def register():
@@ -77,18 +84,12 @@ def register():
     if not email or not password:
         return jsonify({"message": "email and password are required fields."}), 400
 
-    existing_user = User.query.filter_by(email=email).first()
-    if existing_user:
+    if User.query.filter_by(email=email).first():
         return jsonify({"message": "User already exists"}), 409
 
     hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
 
-    new_user = User(
-        fname=fname,
-        lname=lname,
-        email=email,
-        password=hashed_password
-    )
+    new_user = User(fname=fname, lname=lname, email=email, password=hashed_password)
     db.session.add(new_user)
     db.session.commit()
 
@@ -118,19 +119,13 @@ def login():
 def update_user():
     current_user_id = get_jwt_identity()
     data = request.get_json()
-    new_fname = data.get("fname")
-    new_lname = data.get("lname")
 
     user = User.query.get(current_user_id)
-
     if not user:
         return jsonify({"msg": "user not found"}), 400
 
-    if new_fname:
-        user.fname = new_fname
-
-    if new_lname:
-        user.lname = new_lname
+    user.fname = data.get("fname", user.fname)
+    user.lname = data.get("lname", user.lname)
 
     db.session.commit()
     return jsonify({"msg": "profile updated successfully"})
@@ -151,21 +146,22 @@ def delete_user():
     return jsonify({"msg": "user profile deleted successfully"})
 
 
+# ============================= NOTES ROUTES ============================= #
+
 @app.route("/create-notes", methods=["POST"])
 @jwt_required()
 def create_note():
     data = request.get_json()
     user_id = get_jwt_identity()
-
-    tag_names = data.get("tags",[])
+    tag_names = data.get("tags", [])
     tags = []
+
     for name in tag_names:
         tag = Tag.query.filter_by(name=name).first()
         if not tag:
-            tag =Tag(name=name)
+            tag = Tag(name=name)
             db.session.add(tag)
         tags.append(tag)
-
 
     note = Notes(
         title=data.get("title"),
@@ -176,6 +172,7 @@ def create_note():
         trashed=data.get("trashed", False),
         user_id=user_id
     )
+
     db.session.add(note)
     db.session.commit()
     return jsonify({"msg": "note created"}), 201
@@ -186,11 +183,12 @@ def create_note():
 def get_note():
     current_user_id = get_jwt_identity()
     notes = Notes.query.filter_by(user_id=current_user_id, trashed=False).all()
+
     result = [{
         "id": n.id,
         "title": n.title,
         "content": n.content,
-        "tags": n.tags,
+        "tags": [t.name for t in n.tags],
         "pinned": n.pinned,
         "color": n.color
     } for n in notes]
@@ -221,11 +219,13 @@ def filter_notes_by_tags():
 
     return jsonify(result), 200
 
+
 @app.route("/trash-note/<int:note_id>", methods=["PUT"])
 @jwt_required()
 def trash_note(note_id):
     current_user_id = get_jwt_identity()
     note = Notes.query.filter_by(id=note_id, user_id=current_user_id).first()
+
     if not note:
         return jsonify({"error": "note not found"}), 404
 
@@ -239,11 +239,12 @@ def trash_note(note_id):
 def get_trashed_note():
     current_user_id = get_jwt_identity()
     notes = Notes.query.filter_by(user_id=current_user_id, trashed=True).all()
+
     result = [{
         "id": n.id,
         "title": n.title,
         "content": n.content,
-        "tags": n.tags,
+        "tags": [t.name for t in n.tags],
         "pinned": n.pinned,
         "color": n.color
     } for n in notes]
@@ -256,6 +257,7 @@ def get_trashed_note():
 def update_note(note_id):
     current_user_id = get_jwt_identity()
     note = Notes.query.filter_by(id=note_id, user_id=current_user_id).first()
+
     if not note:
         return jsonify({"error": "Note not found"}), 404
 
@@ -280,14 +282,21 @@ def update_note(note_id):
     return jsonify({"msg": "note updated"}), 200
 
 
-
 @app.route("/delete-note/<int:note_id>", methods=["DELETE"])
+@jwt_required()
 def delete_note(note_id):
-    note = Notes.query.get_or_404(note_id)
+    current_user_id = get_jwt_identity()
+    note = Notes.query.filter_by(id=note_id, user_id=current_user_id).first()
+
+    if not note:
+        return jsonify({"error": "note not found"}), 404
+
     db.session.delete(note)
     db.session.commit()
-    return jsonify({"msg": "note deleted"})
+    return jsonify({"msg": "note deleted"}), 200
 
+
+# ============================= MAIN ============================= #
 
 if __name__ == '__main__':
     app.run(debug=True)
