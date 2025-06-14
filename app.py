@@ -73,7 +73,7 @@ def login():
     if not user or not bcrypt.check_password_hash(user.password, password):
         return {"error": "invalid credentials"}, 401
     
-    access_token = create_access_token(identity=user.id)
+    access_token = create_access_token(identity=str(user.id))
     return jsonify({'message': 'Login Success', 'access_token': access_token}), 200
 
 
@@ -87,7 +87,7 @@ def update_user():
     new_fname = data.get("fname")
     new_lname = data.get("lname")
 
-    user = User.query.filter_by(email=current_user_id)
+    user = User.query.get(current_user_id)
 
     if not user:
         return jsonify({"msg":"user not found"}), 400
@@ -105,7 +105,7 @@ def update_user():
 @jwt_required()
 def delete_user():
     current_user_id = get_jwt_identity()
-    user = User.query.filter_by(email=current_user_id)
+    user = User.query.get(current_user_id)
 
     if not user:
         return jsonify({"eror":"user not found"}), 404
@@ -131,33 +131,76 @@ class Notes(db.Model):
     tags = db.Column(db.String(200))
     color = db.Column(db.String(30), default="#ffffff")
     pinned = db.Column(db.Boolean, default = False)
+    trashed = db.Column(db.Boolean, default= False)
+
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    user = db.relationship("User", backref="notes")
 
     def __repr__(self):
-        return f"User {self.id}, {self.title}"
+        return f"<Note id={self.id} title={self.title}>"
 
 
 
 
 @app.route("/create-notes", methods=["POST"])
+@jwt_required()
 def create_note():
     data = request.get_json()
+    user_id = get_jwt_identity()
     note = Notes(
-        title=data["title"],
-        content=data["content"],
-        tags=data["tags"],
-        color=data["color"],
-        pinned=data["pinned"],
+        title=data.get("title"),
+        content=data.get("content"),
+        tags=data.get("tags"),
+        color=data.get("color"),
+        pinned=data.get("pinned", False),
+        trashed = data.get("trashed", False),
+        user_id = user_id
 
     )
     db.session.add(note)
     db.session.commit()
-    return jsonify({"msg":"note created"})
+    return jsonify({"msg":"note created"}), 201
 
 
 
 @app.route("/get-notes", methods=["GET"])
+@jwt_required()
 def get_note():
-    notes = Notes.query.all()
+    current_user_id = get_jwt_identity()
+    notes = Notes.query.filter_by(user_id = current_user_id, trashed = False).all()
+    result = []
+    for n in notes:
+        result.append(
+            
+            {"id": n.id,
+        "title": n.title,
+        "content": n.content,
+        "tags": n.tags,
+        "pinned": n.pinned,
+        "color": n.color
+        }
+
+        )
+    return jsonify(result),200
+
+@app.route("/trash-note/<int:note_id>", methods=["PUT"])
+@jwt_required()
+def trash_note(note_id):
+    current_user_id = get_jwt_identity()
+    note = Notes.query.filter_by(id = note_id,user_id = current_user_id).first()
+    if not note:
+        return jsonify({"error":"notes not found"}),404
+    note.trashed=True
+
+    db.session.commit()
+    return jsonify({"msg":"note moved to trash"}), 200
+
+
+@app.route("/get-trashed-note", methods = ["GET"])
+@jwt_required()
+def get_trashed_note():
+    current_user_id = get_jwt_identity()
+    notes = Notes.query.filter_by(user_id = current_user_id,trashed=True).all()
     result = []
     for n in notes:
         result.append(
@@ -175,8 +218,8 @@ def get_note():
 
 
 
-
 @app.route("/notes/<int:note_id>", methods=["PUT"])
+@jwt_required()
 def update_note(note_id):
     note = Notes.query.get_or_404(note_id)
     data = request.json
