@@ -22,6 +22,12 @@ bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 
 
+note_tags = db.Table('note_tags',
+    db.Column('note_id', db.Integer,db.ForeignKey('notes.id')),
+    db.Column('tag_id',db.Integer, db.ForeignKey('tags.id'))
+
+)
+
 class User(db.Model):
     __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
@@ -33,19 +39,28 @@ class User(db.Model):
     def __repr__(self):
         return f"User {self.fname}, {self.lname}, {self.email}"
 
+class Tag(db.Model):
+    __tablename__ = "tags"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), unique= True)
+
+    
+
+
 
 class Notes(db.Model):
     __tablename__ = "notes"
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)
     content = db.Column(db.Text)
-    tags = db.Column(db.String(200))
     color = db.Column(db.String(30), default="#ffffff")
     pinned = db.Column(db.Boolean, default=False)
     trashed = db.Column(db.Boolean, default=False)
 
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     user = db.relationship("User", backref="notes")
+
+    tags = db.relationship("Tag",secondary = note_tags, backref = db.backref("notes", lazy="dynamic"))
 
     def __repr__(self):
         return f"<Note id={self.id} title={self.title}>"
@@ -141,10 +156,21 @@ def delete_user():
 def create_note():
     data = request.get_json()
     user_id = get_jwt_identity()
+
+    tag_names = data.get("tags",[])
+    tags = []
+    for name in tag_names:
+        tag = Tag.query.filter_by(name=name).first()
+        if not tag:
+            tag =Tag(name=name)
+            db.session.add(tag)
+        tags.append(tag)
+
+
     note = Notes(
         title=data.get("title"),
         content=data.get("content"),
-        tags=data.get("tags"),
+        tags=tags,
         color=data.get("color"),
         pinned=data.get("pinned", False),
         trashed=data.get("trashed", False),
@@ -171,6 +197,29 @@ def get_note():
 
     return jsonify(result), 200
 
+
+@app.route("/filter-notes", methods=["GET"])
+@jwt_required()
+def filter_notes_by_tags():
+    current_user_id = get_jwt_identity()
+    tag_names = request.args.getlist("tag")
+
+    notes = Notes.query.join(Notes.tags).filter(
+        Notes.user_id == current_user_id,
+        Tag.name.in_(tag_names),
+        Notes.trashed == False
+    ).all()
+
+    result = [{
+        "id": n.id,
+        "title": n.title,
+        "content": n.content,
+        "tags": [t.name for t in n.tags],
+        "pinned": n.pinned,
+        "color": n.color
+    } for n in notes]
+
+    return jsonify(result), 200
 
 @app.route("/trash-note/<int:note_id>", methods=["PUT"])
 @jwt_required()
@@ -205,16 +254,31 @@ def get_trashed_note():
 @app.route("/notes/<int:note_id>", methods=["PUT"])
 @jwt_required()
 def update_note(note_id):
-    note = Notes.query.get_or_404(note_id)
-    data = request.json
+    current_user_id = get_jwt_identity()
+    note = Notes.query.filter_by(id=note_id, user_id=current_user_id).first()
+    if not note:
+        return jsonify({"error": "Note not found"}), 404
+
+    data = request.get_json()
     note.title = data.get('title', note.title)
     note.content = data.get('content', note.content)
-    note.tags = data.get('tags', note.tags)
     note.pinned = data.get('pinned', note.pinned)
     note.color = data.get('color', note.color)
 
+    tag_names = data.get('tags', [])
+    if tag_names:
+        new_tags = []
+        for name in tag_names:
+            tag = Tag.query.filter_by(name=name).first()
+            if not tag:
+                tag = Tag(name=name)
+                db.session.add(tag)
+            new_tags.append(tag)
+        note.tags = new_tags
+
     db.session.commit()
-    return jsonify({"msg": "note updated"})
+    return jsonify({"msg": "note updated"}), 200
+
 
 
 @app.route("/delete-note/<int:note_id>", methods=["DELETE"])
