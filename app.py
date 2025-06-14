@@ -1,34 +1,57 @@
+import os
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_bcrypt import Bcrypt
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import (
+    JWTManager, create_access_token, jwt_required, get_jwt_identity
+)
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
-
-app.config['SECRET_KEY'] = 'secretkey'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:1234567@localhost:5432/profile'
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 
 
-
 class User(db.Model):
     __tablename__ = "users"
-    id = db.Column(db.Integer, primary_key = True)
+    id = db.Column(db.Integer, primary_key=True)
     fname = db.Column(db.String(30))
     lname = db.Column(db.String(30))
     email = db.Column(db.String(30), unique=True)
-    password = db.Column(db.String(100),nullable=False)
+    password = db.Column(db.String(100), nullable=False)
 
     def __repr__(self):
-        return f"User {self.fname}, {self.lname},{self.email}"
+        return f"User {self.fname}, {self.lname}, {self.email}"
 
 
-@app.route("/register", methods = ["Post"])
+class Notes(db.Model):
+    __tablename__ = "notes"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(100), nullable=False)
+    content = db.Column(db.Text)
+    tags = db.Column(db.String(200))
+    color = db.Column(db.String(30), default="#ffffff")
+    pinned = db.Column(db.Boolean, default=False)
+    trashed = db.Column(db.Boolean, default=False)
+
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    user = db.relationship("User", backref="notes")
+
+    def __repr__(self):
+        return f"<Note id={self.id} title={self.title}>"
+
+
+@app.route("/register", methods=["POST"])
 def register():
     data = request.get_json()
     fname = data.get("fname")
@@ -36,30 +59,28 @@ def register():
     email = data.get("email")
     password = data.get("password")
 
-    if  not email or not password:
+    if not email or not password:
         return jsonify({"message": "email and password are required fields."}), 400
 
     existing_user = User.query.filter_by(email=email).first()
     if existing_user:
         return jsonify({"message": "User already exists"}), 409
-    
+
     hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-    
+
     new_user = User(
-    fname = fname,
-    lname = lname,
-    email = email,
-    password = hashed_password
+        fname=fname,
+        lname=lname,
+        email=email,
+        password=hashed_password
     )
     db.session.add(new_user)
     db.session.commit()
 
-    
-
-    return ({"msg":"registration done!"})
+    return jsonify({"msg": "registration done!"})
 
 
-@app.route("/login", methods =["POST"])
+@app.route("/login", methods=["POST"])
 def login():
     data = request.get_json()
     email = data.get("email")
@@ -67,19 +88,17 @@ def login():
 
     if not email or not password:
         return {"error": "email and password are required"}, 400
-    
-    user = User.query.filter_by(email= email).first()
+
+    user = User.query.filter_by(email=email).first()
 
     if not user or not bcrypt.check_password_hash(user.password, password):
         return {"error": "invalid credentials"}, 401
-    
+
     access_token = create_access_token(identity=str(user.id))
     return jsonify({'message': 'Login Success', 'access_token': access_token}), 200
 
 
-
-
-@app.route("/update", methods = ["PUT"])
+@app.route("/update", methods=["PUT"])
 @jwt_required()
 def update_user():
     current_user_id = get_jwt_identity()
@@ -90,8 +109,8 @@ def update_user():
     user = User.query.get(current_user_id)
 
     if not user:
-        return jsonify({"msg":"user not found"}), 400
-    
+        return jsonify({"msg": "user not found"}), 400
+
     if new_fname:
         user.fname = new_fname
 
@@ -99,47 +118,22 @@ def update_user():
         user.lname = new_lname
 
     db.session.commit()
-    return jsonify({"msg": "profuile updted successfully"})
+    return jsonify({"msg": "profile updated successfully"})
 
-@app.route("/delete" , methods = ["DELETE"])
+
+@app.route("/delete", methods=["DELETE"])
 @jwt_required()
 def delete_user():
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
 
     if not user:
-        return jsonify({"eror":"user not found"}), 404
-    
+        return jsonify({"error": "user not found"}), 404
+
     db.session.delete(user)
     db.session.commit()
 
-    return jsonify({"msg": "user profile deleted succesfully"})
-
-    
-
-
-
-# @app.route("/logout", methods= ["POST"])
-# def logout():
-#     return "logout done"
-
-class Notes(db.Model):
-    __tablename__ = "notes"
-    id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(100), nullable = False)
-    content = db.Column(db.Text)
-    tags = db.Column(db.String(200))
-    color = db.Column(db.String(30), default="#ffffff")
-    pinned = db.Column(db.Boolean, default = False)
-    trashed = db.Column(db.Boolean, default= False)
-
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    user = db.relationship("User", backref="notes")
-
-    def __repr__(self):
-        return f"<Note id={self.id} title={self.title}>"
-
-
+    return jsonify({"msg": "user profile deleted successfully"})
 
 
 @app.route("/create-notes", methods=["POST"])
@@ -153,69 +147,59 @@ def create_note():
         tags=data.get("tags"),
         color=data.get("color"),
         pinned=data.get("pinned", False),
-        trashed = data.get("trashed", False),
-        user_id = user_id
-
+        trashed=data.get("trashed", False),
+        user_id=user_id
     )
     db.session.add(note)
     db.session.commit()
-    return jsonify({"msg":"note created"}), 201
-
+    return jsonify({"msg": "note created"}), 201
 
 
 @app.route("/get-notes", methods=["GET"])
 @jwt_required()
 def get_note():
     current_user_id = get_jwt_identity()
-    notes = Notes.query.filter_by(user_id = current_user_id, trashed = False).all()
-    result = []
-    for n in notes:
-        result.append(
-            
-            {"id": n.id,
+    notes = Notes.query.filter_by(user_id=current_user_id, trashed=False).all()
+    result = [{
+        "id": n.id,
         "title": n.title,
         "content": n.content,
         "tags": n.tags,
         "pinned": n.pinned,
         "color": n.color
-        }
+    } for n in notes]
 
-        )
-    return jsonify(result),200
+    return jsonify(result), 200
+
 
 @app.route("/trash-note/<int:note_id>", methods=["PUT"])
 @jwt_required()
 def trash_note(note_id):
     current_user_id = get_jwt_identity()
-    note = Notes.query.filter_by(id = note_id,user_id = current_user_id).first()
+    note = Notes.query.filter_by(id=note_id, user_id=current_user_id).first()
     if not note:
-        return jsonify({"error":"notes not found"}),404
-    note.trashed=True
+        return jsonify({"error": "note not found"}), 404
 
+    note.trashed = True
     db.session.commit()
-    return jsonify({"msg":"note moved to trash"}), 200
+    return jsonify({"msg": "note moved to trash"}), 200
 
 
-@app.route("/get-trashed-note", methods = ["GET"])
+@app.route("/get-trashed-note", methods=["GET"])
 @jwt_required()
 def get_trashed_note():
     current_user_id = get_jwt_identity()
-    notes = Notes.query.filter_by(user_id = current_user_id,trashed=True).all()
-    result = []
-    for n in notes:
-        result.append(
-            
-            {"id": n.id,
+    notes = Notes.query.filter_by(user_id=current_user_id, trashed=True).all()
+    result = [{
+        "id": n.id,
         "title": n.title,
         "content": n.content,
         "tags": n.tags,
         "pinned": n.pinned,
         "color": n.color
-        }
+    } for n in notes]
 
-        )
-    return jsonify(result),200
-
+    return jsonify(result), 200
 
 
 @app.route("/notes/<int:note_id>", methods=["PUT"])
@@ -230,9 +214,7 @@ def update_note(note_id):
     note.color = data.get('color', note.color)
 
     db.session.commit()
-    return jsonify({"msg":"updated"})
-
-
+    return jsonify({"msg": "note updated"})
 
 
 @app.route("/delete-note/<int:note_id>", methods=["DELETE"])
@@ -240,7 +222,7 @@ def delete_note(note_id):
     note = Notes.query.get_or_404(note_id)
     db.session.delete(note)
     db.session.commit()
-    return jsonify({"msg":"note deleted"})
+    return jsonify({"msg": "note deleted"})
 
 
 if __name__ == '__main__':
