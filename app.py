@@ -8,29 +8,24 @@ from flask_jwt_extended import (
 )
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Initialize app and config
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv("DATABASE_URL")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Initialize extensions
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 
-# Association Table for Many-to-Many Relationship
 note_tags = db.Table(
     'note_tags',
     db.Column('note_id', db.Integer, db.ForeignKey('notes.id')),
     db.Column('tag_id', db.Integer, db.ForeignKey('tags.id'))
 )
 
-# ============================= MODELS ============================= #
 
 class User(db.Model):
     __tablename__ = "users"
@@ -71,7 +66,6 @@ class Notes(db.Model):
         return f"<Note id={self.id} title={self.title}>"
 
 
-# ============================= AUTH ROUTES ============================= #
 
 @app.route("/register", methods=["POST"])
 def register():
@@ -146,7 +140,6 @@ def delete_user():
     return jsonify({"msg": "user profile deleted successfully"})
 
 
-# ============================= NOTES ROUTES ============================= #
 
 @app.route("/create-notes", methods=["POST"])
 @jwt_required()
@@ -296,7 +289,6 @@ def delete_note(note_id):
     return jsonify({"msg": "note deleted"}), 200
 
 
-# ============================= MAIN ============================= #
 
 if __name__ == '__main__':
     app.run(debug=True)
